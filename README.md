@@ -56,7 +56,7 @@ Expected: `The Coq Proof Assistant, version 8.18.0`.
 ## 2) Build All CoqStoq Projects
 
 ```bash
-cd /home/yangfp/ACProver/src
+cd src
 conda activate coq-py310
 source activate_coq_env.sh
 export N_JOBS=4
@@ -74,7 +74,7 @@ python3 check_build_status.py
 ### CLI
 
 ```bash
-cd /home/yangfp/ACProver/src
+cd src
 python3 verify_proof.py test:39 "Proof. intros a b1 b2 l H; inversion H; auto. Qed."
 ```
 
@@ -103,7 +103,7 @@ Return states:
 Use `coq_print.py` for external queries.
 
 ```bash
-cd /home/yangfp/ACProver/src
+cd src
 python3 coq_print.py "Print nat."
 python3 coq_print.py "Check plus."
 python3 coq_print.py "Print unique_key_in." --repo ../CoqStoq/test-repos/huffman --compile-args "-R theories Huffman"
@@ -140,7 +140,7 @@ python3 proof_task_client.py --theorem-id test:39 --dump-system-prompt
 Rebuild all projects with the current Coq switch:
 
 ```bash
-cd /home/yangfp/ACProver/src
+cd src
 bash build_coqstoq_complete.sh
 ```
 
@@ -156,6 +156,6 @@ coqc --version
 Always source project env vars before running tools:
 
 ```bash
-cd /home/yangfp/ACProver/src
+cd src
 source activate_coq_env.sh
 ```
