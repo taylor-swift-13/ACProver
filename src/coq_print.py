@@ -45,6 +45,7 @@ def _find_coqtop() -> str:
 def execute_print_command(
     query_command: str,
     setup_commands: Optional[List[str]] = None,
+    setup_script: Optional[str] = None,
     compile_args: Optional[List[str]] = None,
     cwd: Optional[str] = None,
     timeout: int = 60,
@@ -57,6 +58,12 @@ def execute_print_command(
     coqtop_path = _find_coqtop()
 
     lines: List[str] = []
+    if setup_script and setup_script.strip():
+        script_block = setup_script
+        if not script_block.endswith("\n"):
+            script_block += "\n"
+        lines.append(script_block.rstrip("\n"))
+
     for cmd in setup_commands:
         cmd = cmd.strip()
         if cmd:
