@@ -17,7 +17,7 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
 from coq_print import execute_print_command
 from verify import CoqProofVerifier
@@ -85,9 +85,15 @@ class ToolRegistry:
 class VerifyProofTool:
     name = "verify_proof"
 
-    def __init__(self, verifier: CoqProofVerifier, theorem_id: str):
+    def __init__(
+        self,
+        verifier: CoqProofVerifier,
+        theorem_id: str,
+        prelude_supplier: Optional[Callable[[], str]] = None,
+    ):
         self.verifier = verifier
         self.theorem_id = theorem_id
+        self.prelude_supplier = prelude_supplier
 
     def spec(self) -> Dict[str, Any]:
         return {
@@ -106,7 +112,8 @@ class VerifyProofTool:
         proof = args.get("proof", "")
         if not isinstance(proof, str) or not proof.strip():
             return {"success": False, "error": "proof 不能为空字符串"}
-        return self.verifier.verify_proof(self.theorem_id, proof)
+        prelude = self.prelude_supplier() if self.prelude_supplier is not None else ""
+        return self.verifier.verify_proof(self.theorem_id, proof, injected_prelude=prelude)
 
 
 class PrintDefinitionTool:
@@ -151,9 +158,15 @@ class PrintDefinitionTool:
 class StepTacticTool:
     name = "step_tactic"
 
-    def __init__(self, verifier: CoqProofVerifier, theorem_id: str):
+    def __init__(
+        self,
+        verifier: CoqProofVerifier,
+        theorem_id: str,
+        prelude_supplier: Optional[Callable[[], str]] = None,
+    ):
         self.verifier = verifier
         self.theorem_id = theorem_id
+        self.prelude_supplier = prelude_supplier
 
     def spec(self) -> Dict[str, Any]:
         return {
@@ -180,7 +193,8 @@ class StepTacticTool:
             return {"success": False, "error": "tactic 必须是单行单步命令"}
 
         next_proof = proof_prefix.rstrip() + "\n" + tactic.strip()
-        result = self.verifier.verify_proof(self.theorem_id, next_proof)
+        prelude = self.prelude_supplier() if self.prelude_supplier is not None else ""
+        result = self.verifier.verify_proof(self.theorem_id, next_proof, injected_prelude=prelude)
         result["current_proof"] = next_proof
         result["step_appended"] = tactic.strip()
         return result
@@ -487,8 +501,25 @@ class ProofTaskClient:
     def __init__(self, theorem_id: str, context_lines: int = 80, coqstoq_path: Optional[str] = None):
         self.verifier = CoqProofVerifier(coqstoq_path=coqstoq_path)
         self.task = self._build_task_context(theorem_id, context_lines)
+        self.proven_lemma_blocks: List[str] = []
+        self._proven_lemma_set: set[str] = set()
         self.registry = ToolRegistry()
         self._register_builtin_tools()
+
+    def get_injected_lemma_prelude(self) -> str:
+        return "\n\n".join(self.proven_lemma_blocks)
+
+    def add_proven_lemma(self, lemma_decl: str, proof_content: str) -> None:
+        declaration = lemma_decl.strip()
+        proof_text = proof_content.strip()
+        if not declaration or not proof_text:
+            return
+        block = f"{declaration}\n{proof_text}"
+        key = " ".join(block.split())
+        if key in self._proven_lemma_set:
+            return
+        self._proven_lemma_set.add(key)
+        self.proven_lemma_blocks.append(block)
 
     def _build_task_context(self, theorem_id: str, m: int) -> TaskContext:
         split_name, index = self.verifier._parse_theorem_id(theorem_id)  # pylint: disable=protected-access
@@ -624,7 +655,13 @@ class ProofTaskClient:
         }
 
     def _register_builtin_tools(self) -> None:
-        self.registry.register(VerifyProofTool(self.verifier, self.task.theorem_id))
+        self.registry.register(
+            VerifyProofTool(
+                self.verifier,
+                self.task.theorem_id,
+                prelude_supplier=self.get_injected_lemma_prelude,
+            )
+        )
         self.registry.register(
             PrintDefinitionTool(
                 self.task.repo_path,
@@ -632,7 +669,13 @@ class ProofTaskClient:
                 setup_script=self.task.print_setup_script,
             )
         )
-        self.registry.register(StepTacticTool(self.verifier, self.task.theorem_id))
+        self.registry.register(
+            StepTacticTool(
+                self.verifier,
+                self.task.theorem_id,
+                prelude_supplier=self.get_injected_lemma_prelude,
+            )
+        )
         self.registry.register(BM25SearchTool(self.task.repo_path, self.task.file_relpath))
         self.registry.register(NaturalLanguageProofTool(self.task))
 
@@ -893,7 +936,9 @@ def run_loop(client: ProofTaskClient, driver: ModelDriver, max_steps: int) -> Di
             tool_result = client.verify_lemma_proof(lemma_mode["declaration"], proof_text)
             lemma_mode["steps"] += 1
             if tool_result.get("success") and tool_result.get("state") == "proven":
+                client.add_proven_lemma(lemma_mode["declaration"], proof_text)
                 tool_result["proof_status"] = "lemma proven; exit lemma mode"
+                tool_result["injected_lemma_count"] = len(client.proven_lemma_blocks)
                 lemma_mode = None
             elif lemma_mode is not None and lemma_mode["steps"] >= LEMMA_MODE_MAX_STEPS:
                 # Drop lemma context and return to theorem mode.

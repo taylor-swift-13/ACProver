@@ -208,7 +208,12 @@ class CoqProofVerifier:
         except Exception:
             return "无法提取定理陈述"
 
-    def verify_proof(self, theorem_id: str, proof_content: str) -> Dict[str, Any]:
+    def verify_proof(
+        self,
+        theorem_id: str,
+        proof_content: str,
+        injected_prelude: str = "",
+    ) -> Dict[str, Any]:
         """
         验证证明（替换原证明并验证）
 
@@ -299,7 +304,12 @@ class CoqProofVerifier:
 
         try:
             # Step 2: 使用精确的 column 位置构造新文件（参考 check.py 的 get_check_contents）
-            new_content = self._construct_new_file(original_lines, theorem_def, proof_content)
+            new_content = self._construct_new_file(
+                original_lines,
+                theorem_def,
+                proof_content,
+                injected_prelude=injected_prelude,
+            )
             
             with open(temp_path, 'w', encoding='utf-8') as temp_file:
                 temp_file.write(new_content)
@@ -470,8 +480,13 @@ class CoqProofVerifier:
             if tmp_dir.exists():
                 shutil.rmtree(tmp_dir)
 
-    def _construct_new_file(self, original_lines: List[str], theorem_def: Dict[str, Any],
-                           proof_content: str) -> str:
+    def _construct_new_file(
+        self,
+        original_lines: List[str],
+        theorem_def: Dict[str, Any],
+        proof_content: str,
+        injected_prelude: str = "",
+    ) -> str:
         """
         使用精确的 column 位置构造新文件（参考 check.py 的 get_check_contents）
         
@@ -484,16 +499,28 @@ class CoqProofVerifier:
         theorem_end_pos = theorem_def.get("theorem_end_pos", {})
         proof_end_pos = theorem_def.get("proof_end_pos", {})
         
+        theorem_start_pos = theorem_def.get("theorem_start_pos", {})
+        theorem_start_line = theorem_start_pos.get("line", 0)
         theorem_end_line = theorem_end_pos.get("line", 0)
         theorem_end_column = theorem_end_pos.get("column", 0)
         proof_end_line = proof_end_pos.get("line", 0)
         proof_end_column = proof_end_pos.get("column", 0)
-        
-        # 构造前缀：定理声明及之前的内容
-        prefix_lines = original_lines[:theorem_end_line + 1].copy()
-        if prefix_lines:
-            # 截断最后一行到 theorem_end_pos.column
-            prefix_lines[-1] = prefix_lines[-1][:theorem_end_column]
+
+        # 构造前缀：可选注入引理后，再拼接原定理声明
+        before_theorem = "".join(original_lines[:theorem_start_line])
+        theorem_decl_lines = original_lines[theorem_start_line:theorem_end_line + 1].copy()
+        if theorem_decl_lines:
+            theorem_decl_lines[-1] = theorem_decl_lines[-1][:theorem_end_column]
+        theorem_decl = "".join(theorem_decl_lines)
+
+        injected = injected_prelude.strip()
+        if injected:
+            if before_theorem and not before_theorem.endswith("\n"):
+                before_theorem += "\n"
+            injected_block = injected + ("\n" if not injected.endswith("\n") else "")
+            prefix_text = before_theorem + injected_block + theorem_decl
+        else:
+            prefix_text = before_theorem + theorem_decl
         
         # 构造后缀：原证明之后的内容
         suffix_lines = original_lines[proof_end_line:].copy()
@@ -511,14 +538,14 @@ class CoqProofVerifier:
         # 组合新文件内容
         # 注意：需要在证明前添加换行符，确保证明在新行开始
         new_content = ""
-        new_content += "".join(prefix_lines)
-        # 确保前缀以换行符结尾（如果 prefix_lines 的最后一行没有以换行符结束）
-        if prefix_lines and not prefix_lines[-1].endswith("\n"):
+        new_content += prefix_text
+        # 确保前缀以换行符结尾
+        if prefix_text and not prefix_text.endswith("\n"):
             new_content += "\n"
         new_content += use_proof + "\n"
         new_content += "Qed."
         new_content += "".join(suffix_lines)
-        
+
         return new_content
 
     def _extract_context_before_theorem(self, repo_path: str, theorem_def: Dict[str, Any]) -> str:
@@ -694,7 +721,7 @@ Show.
 
 
 # 便捷函数
-def verify_proof(theorem_id: str, proof_content: str) -> Dict[str, Any]:
+def verify_proof(theorem_id: str, proof_content: str, injected_prelude: str = "") -> Dict[str, Any]:
     """
     验证证明（替换原证明并验证）
 
@@ -706,7 +733,7 @@ def verify_proof(theorem_id: str, proof_content: str) -> Dict[str, Any]:
         验证结果字典
     """
     verifier = CoqProofVerifier()
-    return verifier.verify_proof(theorem_id, proof_content)
+    return verifier.verify_proof(theorem_id, proof_content, injected_prelude=injected_prelude)
 
 
 def get_theorem_info(theorem_id: str) -> Optional[Dict[str, Any]]:
