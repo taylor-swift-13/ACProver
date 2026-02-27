@@ -16,7 +16,10 @@ import math
 import os
 import re
 import subprocess
+import traceback
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
 from coq_print import execute_print_command
@@ -457,10 +460,11 @@ class ModelDriver(Protocol):
 class OpenAIModelDriver:
     """Use OpenAI SDK with key from environment variable OPENAI_API_KEY."""
 
-    def __init__(self, model: str = "gpt-5-nano"):
+    def __init__(self, model: str = "gpt-5-nano", temperature: float = 0.0):
         self.model = model
         self.api_key = OPENAI_API_KEY
         self.base_url = OPENAI_BASE_URL
+        self.temperature = temperature
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY is empty. Set it in your shell environment before running.")
 
@@ -491,7 +495,7 @@ class OpenAIModelDriver:
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         resp = client.chat.completions.create(
             model=self.model,
-            temperature=0.0,
+            temperature=self.temperature,
             messages=[{"role": "user", "content": query}],
         )
         return (resp.choices[0].message.content or "").strip()
@@ -880,6 +884,61 @@ def _compact_tool_result(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _slug(text: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("_")
+
+
+def _default_log_dir(theorem_id: str) -> Path:
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    theorem_slug = theorem_id.replace(":", "_")
+    return Path(__file__).resolve().parent.parent / "log" / f"{theorem_slug}_{stamp}_log"
+
+
+def _render_readable_log(result: Dict[str, Any]) -> str:
+    lines: List[str] = []
+    lines.append(f"success: {result.get('success')}")
+    if "steps_used" in result:
+        lines.append(f"steps_used: {result.get('steps_used')}")
+    if result.get("error"):
+        lines.append(f"error: {result.get('error')}")
+
+    verification = result.get("verification")
+    if isinstance(verification, dict):
+        lines.append("")
+        lines.append("[verification]")
+        for key in ("state", "proof_status", "error_message", "proof_state"):
+            if verification.get(key):
+                lines.append(f"{key}: {verification.get(key)}")
+        if verification.get("proof_content"):
+            lines.append("proof_content:")
+            lines.append(str(verification.get("proof_content")))
+
+    messages = result.get("messages")
+    if isinstance(messages, list):
+        for idx, msg in enumerate(messages, start=1):
+            if not isinstance(msg, dict):
+                continue
+            lines.append("")
+            lines.append(f"[message {idx}] role={msg.get('role', 'unknown')}")
+            lines.append(str(msg.get("content", "")))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_attempt_logs(theorem_id: str, result: Dict[str, Any], readable_log_file: Optional[str] = None) -> Path:
+    if readable_log_file:
+        readable_path = Path(readable_log_file).resolve()
+        run_dir = readable_path.parent
+    else:
+        run_dir = _default_log_dir(theorem_id)
+        readable_path = run_dir / "readable"
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    result["log_dir"] = str(run_dir)
+    (run_dir / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    readable_path.write_text(_render_readable_log(result), encoding="utf-8")
+    return run_dir
+
+
 def run_loop(client: ProofTaskClient, driver: ModelDriver, max_steps: int) -> Dict[str, Any]:
     messages: List[Dict[str, str]] = [
         {"role": "system", "content": client.build_system_prompt()},
@@ -993,6 +1052,8 @@ def main() -> None:
     parser.add_argument("--context-lines", type=int, default=80, help="Number of lines before theorem as local context")
     parser.add_argument("--max-steps", type=int, default=20)
     parser.add_argument("--model", default="gpt-4o-mini", help="OpenAI model name")
+    parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature for the main model")
+    parser.add_argument("--readable-log-file", help="Optional path for the human-readable attempt log")
     parser.add_argument("--dump-system-prompt", action="store_true", help="Print system prompt only")
     args = parser.parse_args()
 
@@ -1001,9 +1062,18 @@ def main() -> None:
         print(client.build_system_prompt())
         return
 
-    driver: ModelDriver = OpenAIModelDriver(model=args.model)
-
-    result = run_loop(client=client, driver=driver, max_steps=args.max_steps)
+    try:
+        driver: ModelDriver = OpenAIModelDriver(model=args.model, temperature=args.temperature)
+        result = run_loop(client=client, driver=driver, max_steps=args.max_steps)
+    except Exception as e:
+        result = {
+            "success": False,
+            "error": "fatal_client_error",
+            "details": str(e),
+            "traceback": traceback.format_exc(),
+            "messages": [],
+        }
+    write_attempt_logs(args.theorem_id, result, readable_log_file=args.readable_log_file)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
