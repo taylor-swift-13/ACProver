@@ -21,6 +21,7 @@ The command returns JSON hits with:
 - `source_theorem_id`
 - `project`
 - `file_relpath`
+- `source_file_path`
 - `semantic_explanation`
 - `normalized_theorem_types`
 - `coq_libraries`
@@ -40,6 +41,7 @@ The command returns JSON hits with:
    - compare `normalized_theorem_types`
    - compare `coq_libraries`
    - compare `project` and `file_relpath`
+   - note `source_file_path` for direct fallback into the original CoqStoq source file
 5. Only after metadata triage, open the saved files you actually need:
    - `reasoning_path`
    - `issues_path`
@@ -48,6 +50,19 @@ The command returns JSON hits with:
    - `oracle_proof_path`
 
 Do not start by scanning every `.md` or `.v` file under `experience/`.
+
+## When metadata is not enough
+
+If the retrieved metadata and saved artifacts still do not give enough context, go back to the original project file named by `source_file_path`.
+
+Use the original source file to:
+
+- inspect nearby definitions
+- inspect notation and imports
+- inspect adjacent lemmas in the same file
+- locate names that appear in `coq_libraries`
+
+Use this only after metadata triage. Do not start from the whole project tree when the metadata already narrows the target file.
 
 ## Batch querying
 

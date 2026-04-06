@@ -553,6 +553,7 @@ def build_experience_bundle(
         "source_theorem_id": task.theorem_id,
         "project": task.project,
         "file_relpath": task.file_relpath,
+        "source_file_path": str(task.source_path()),
         "semantic_explanation": semantic_explanation,
         "normalized_theorem_types": theorem_types,
         "coq_libraries": coq_libraries,

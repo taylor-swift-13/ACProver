@@ -181,6 +181,7 @@ def _decorate_hit(score: float, metadata: Dict[str, Any], score_breakdown: Dict[
         "source_theorem_id": metadata.get("source_theorem_id"),
         "project": metadata.get("project"),
         "file_relpath": metadata.get("file_relpath"),
+        "source_file_path": metadata.get("source_file_path", ""),
         "semantic_explanation": metadata.get("semantic_explanation", ""),
         "normalized_theorem_types": metadata.get("normalized_theorem_types", []),
         "coq_libraries": metadata.get("coq_libraries", {}),
@@ -279,6 +280,8 @@ def render_experience_prompt_block(experiences: List[Dict[str, Any]]) -> str:
         lines.append(
             f"{index}. {item.get('source_theorem_id')} {item.get('project')}::{item.get('file_relpath')}"
         )
+        if item.get("source_file_path"):
+            lines.append(f"   source_file_path: {str(item.get('source_file_path'))}")
         lines.append(f"   semantic_explanation: {str(item.get('semantic_explanation', '')).strip()}")
         theorem_types = item.get("normalized_theorem_types", [])
         if theorem_types:
