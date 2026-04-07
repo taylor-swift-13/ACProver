@@ -8,6 +8,8 @@ Current scope:
 - standard-library theorem records are stored under `experience/`
 - FAISS indexes `semantic_explanation`
 - agents read `detail.md` and `reasoning.md`
+- standard-library text generation uses `gpt-5-nano` by default
+- local rule-based text generation is only a fallback when model generation fails
 
 ## Environment
 
@@ -39,7 +41,7 @@ python3 src/coqstoq_tools.py build-stdlib-index --module-path Coq.Lists.List
 Query by natural language:
 
 ```bash
-python3 src/coqstoq_tools.py query-experience --description "append with empty list on the right" -k 5
+python3 src/coqstoq_tools.py query-stdlib --description "append with empty list on the right" -k 5
 ```
 
 Legacy proving entrypoint:

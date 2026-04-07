@@ -14,6 +14,9 @@ Use this skill when the task is to construct or refresh the theorem retrieval da
 - Build records from either:
   - Coq standard-library modules
   - existing CoqStoq-derived records
+- Standard-library record text should be generated with the configured LLM.
+- The default low-cost model is `gpt-5-nano`.
+- Rule-based text is only a fallback when the model call fails.
 
 ## Metadata requirements
 

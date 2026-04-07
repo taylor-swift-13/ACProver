@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import openai
 import re
 import shutil
 import subprocess
@@ -25,6 +26,10 @@ except ModuleNotFoundError:
 DECL_RE = re.compile(r"^\s*(Lemma|Theorem|Corollary|Proposition|Fact|Remark)\s+([A-Za-z0-9_']+)\b")
 END_RE = re.compile(r"^\s*(Qed|Defined|Admitted)\.")
 TOKEN_RE = re.compile(r"[A-Za-z0-9_']+")
+DECL_HEAD_RE = re.compile(
+    r"^\s*(Lemma|Theorem|Corollary|Proposition|Fact|Remark)\s+[A-Za-z0-9_']+\b(?:[^:\n]|\n(?!\s*Proof\b))*?:",
+    re.MULTILINE,
+)
 
 
 @dataclass
@@ -85,10 +90,166 @@ def _tokenize(text: str) -> List[str]:
     return [token.lower() for token in TOKEN_RE.findall(text)]
 
 
+def _extract_supporting_context(source_text: str, declaration: str) -> str:
+    blocks: List[str] = []
+    if "Add " in declaration:
+        add_block = _extract_named_block(source_text, "Add")
+        if add_block:
+            blocks.append(add_block)
+    return "\n\n".join(blocks).strip()
+
+
+def _build_llm_prompt(
+    *,
+    kind: str,
+    name: str,
+    declaration: str,
+    proof_text: str,
+    module_path: str,
+    supporting_context: str,
+) -> str:
+    proof_block = proof_text.strip()
+    context_block = supporting_context.strip()
+    return f"""You are generating theorem-retrieval artifacts for a Coq theorem database.
+
+Target theorem:
+- module_path: {module_path}
+- theorem_name: {name}
+- theorem_kind: {kind}
+
+Theorem statement:
+```coq
+{declaration.rstrip()}
+```
+
+Saved proof:
+```coq
+{proof_block}
+```
+
+Supporting definitions or context:
+```coq
+{context_block}
+```
+
+Output JSON with exactly these fields:
+- semantic_explanation
+- detail_md
+- reasoning_md
+
+Requirements:
+- semantic_explanation:
+  - pure natural language
+  - short
+  - use 1 sentence only
+  - target 12 to 24 words
+  - never exceed 32 words
+  - explain the theorem itself
+  - no markdown code fences
+  - avoid raw Coq syntax unless unavoidable
+  - do not explain the proof
+  - do not restate every quantifier or every parameter
+  - do not start with phrases like "The lemma states that", "This theorem says that", "The theorem states that", or similar wrappers
+  - start directly with the mathematical content
+- detail_md:
+  - detailed
+  - explain the theorem itself
+  - explain what the statement says
+  - explain what the conclusion is asserting
+  - explain how the theorem is used
+  - include relevant Coq code blocks
+  - do not focus on proof tactics
+- reasoning_md:
+  - detailed
+  - explain the key definitions needed by the proof
+  - explain why the theorem is proved this way
+  - explain why the proof shape fits the statement
+  - include relevant Coq code blocks when useful
+
+Keep the explanation concrete and polished. Avoid generic filler."""
+
+
+def _generate_llm_artifacts(
+    *,
+    kind: str,
+    name: str,
+    declaration: str,
+    proof_text: str,
+    module_path: str,
+    source_text: str,
+) -> Dict[str, str]:
+    config = load_config()
+    client = openai.OpenAI(
+        base_url=config.llm_base_url,
+        api_key=config.llm_api_key,
+    )
+    prompt = _build_llm_prompt(
+        kind=kind,
+        name=name,
+        declaration=declaration,
+        proof_text=proof_text,
+        module_path=module_path,
+        supporting_context=_extract_supporting_context(source_text, declaration),
+    )
+    response = client.chat.completions.create(
+        model=config.semantic_model,
+        messages=[
+            {"role": "system", "content": "You generate precise theorem-database artifacts in valid JSON."},
+            {"role": "user", "content": prompt + "\n\nReturn JSON only."},
+        ],
+        temperature=config.semantic_temperature,
+    )
+    raw = response.choices[0].message.content or ""
+    payload = json.loads(raw.strip())
+    if not isinstance(payload, dict):
+        raise RuntimeError("LLM generation returned non-object JSON")
+    semantic_explanation = str(payload.get("semantic_explanation", "")).strip()
+    detail_md = str(payload.get("detail_md", "")).strip()
+    reasoning_md = str(payload.get("reasoning_md", "")).strip()
+    if not semantic_explanation or not detail_md or not reasoning_md:
+        raise RuntimeError("LLM generation returned incomplete fields")
+    if _looks_bad_semantic_explanation(semantic_explanation):
+        raise RuntimeError(f"LLM semantic_explanation failed validation: {semantic_explanation!r}")
+    return {
+        "semantic_explanation": semantic_explanation,
+        "detail_md": detail_md,
+        "reasoning_md": reasoning_md,
+    }
+
+
 def _extract_statement_body(declaration: str) -> str:
-    if ":" not in declaration:
+    match = DECL_HEAD_RE.match(declaration)
+    if match is None:
+        if ":" not in declaration:
+            return declaration.strip().rstrip(".")
+        return declaration.split(":", 1)[1].strip().rstrip(".")
+    body = declaration[match.end() :]
+    if not body.strip():
         return declaration.strip().rstrip(".")
-    return declaration.rsplit(":", 1)[1].strip().rstrip(".")
+    return body.strip().rstrip(".")
+
+
+def _looks_bad_semantic_explanation(text: str) -> bool:
+    cleaned = str(text or "").strip()
+    if len(cleaned) < 12:
+        return True
+    if len(cleaned.split()) > 32:
+        return True
+    lowered = cleaned.lower()
+    banned_prefixes = (
+        "the lemma states that",
+        "this theorem says that",
+        "the theorem states that",
+        "the theorem says that",
+        "this lemma says that",
+    )
+    if lowered.startswith(banned_prefixes):
+        return True
+    if cleaned.endswith(").") and len(_tokenize(cleaned)) <= 2:
+        return True
+    if len(_tokenize(cleaned)) < 4:
+        return True
+    return False
 
 
 def _humanize_body(body: str) -> str:
@@ -379,11 +540,19 @@ def build_records_for_module(module_path: str, stdlib_root: Optional[Path] = Non
     records: List[StdlibRecord] = []
     for item in _collect_declarations(source_path):
         record_id = f"{module_path}::{item['name']}"
+        llm_generated = _generate_llm_artifacts(
+            kind=item["kind"],
+            name=item["name"],
+            declaration=item["declaration"],
+            proof_text=item["proof_text"],
+            module_path=module_path,
+            source_text=source_text,
+        )
         records.append(
             StdlibRecord(
                 record_id=record_id,
                 module_path=module_path,
-                semantic_explanation=_semantic_explanation(item["kind"], item["name"], item["declaration"]),
+                semantic_explanation=llm_generated["semantic_explanation"],
                 normalized_theorem_types=_normalized_theorem_types(
                     item["kind"],
                     item["declaration"],
@@ -391,15 +560,8 @@ def build_records_for_module(module_path: str, stdlib_root: Optional[Path] = Non
                 ),
                 context=item["declaration"].rstrip(),
                 proof=(item["declaration"].rstrip() + "\n" + item["proof_text"].rstrip()).strip(),
-                detail_md=_detail_md(item["kind"], item["name"], item["declaration"], module_path, source_text),
-                reasoning_md=_reasoning_md(
-                    item["kind"],
-                    item["name"],
-                    item["declaration"],
-                    item["proof_text"],
-                    module_path,
-                    source_text,
-                ),
+                detail_md=_normalize_code_block(llm_generated["detail_md"]),
+                reasoning_md=_normalize_code_block(llm_generated["reasoning_md"]),
             )
         )
     return records
@@ -440,10 +602,70 @@ def write_records(records: List[StdlibRecord], rebuild_indexes: bool = True) -> 
 
 
 def build_and_write(module_path: str, rebuild_indexes: bool = True) -> Dict[str, Any]:
-    records = build_records_for_module(module_path)
-    result = write_records(records, rebuild_indexes=rebuild_indexes)
-    result["module_path"] = module_path
-    return result
+    stdlib_root = detect_stdlib_root()
+    source_path = module_to_source_path(module_path, stdlib_root)
+    source_text = source_path.read_text(encoding="utf-8")
+    domain_root = experience_domain_root("stdlib")
+    written: List[str] = []
+    record_count = 0
+
+    for item in _collect_declarations(source_path):
+        record_id = f"{module_path}::{item['name']}"
+        llm_generated = _generate_llm_artifacts(
+            kind=item["kind"],
+            name=item["name"],
+            declaration=item["declaration"],
+            proof_text=item["proof_text"],
+            module_path=module_path,
+            source_text=source_text,
+        )
+
+        record = StdlibRecord(
+            record_id=record_id,
+            module_path=module_path,
+            semantic_explanation=llm_generated["semantic_explanation"],
+            normalized_theorem_types=_normalized_theorem_types(
+                item["kind"],
+                item["declaration"],
+                item["proof_text"],
+            ),
+            context=item["declaration"].rstrip(),
+            proof=(item["declaration"].rstrip() + "\n" + item["proof_text"].rstrip()).strip(),
+            detail_md=_normalize_code_block(llm_generated["detail_md"]),
+            reasoning_md=_normalize_code_block(llm_generated["reasoning_md"]),
+        )
+
+        record_dir = _stdlib_record_dir(record.record_id)
+        record_dir.mkdir(parents=True, exist_ok=True)
+        detail_path = record_dir / "detail.md"
+        reasoning_path = record_dir / "reasoning.md"
+        metadata_path = record_dir / "metadata.json"
+        write_text(detail_path, _normalize_code_block(record.detail_md))
+        write_text(reasoning_path, _normalize_code_block(record.reasoning_md))
+        write_json(
+            metadata_path,
+            {
+                "record_id": record.record_id,
+                "module_path": record.module_path,
+                "semantic_explanation": record.semantic_explanation,
+                "normalized_theorem_types": record.normalized_theorem_types,
+                "context": record.context,
+                "proof": record.proof,
+                "detail_path": str(detail_path),
+                "reasoning_path": str(reasoning_path),
+            },
+        )
+        written.append(str(metadata_path))
+        record_count += 1
+
+    refresh = refresh_experience_indexes(domain_root) if rebuild_indexes else {}
+    return {
+        "success": True,
+        "record_count": record_count,
+        "metadata_paths": written,
+        "refresh": refresh,
+        "module_path": module_path,
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:

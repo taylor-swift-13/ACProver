@@ -1,4 +1,9 @@
 {
   "opam_switch": "qcp-8.20",
-  "vector_conda_env": "coq-py310"
+  "vector_conda_env": "coq-py310",
+  "semantic_model": "gpt-5.4-nano",
+  "semantic_reasoning_effort": "low",
+  "llm_base_url": "https://yunwu.ai/v1",
+  "llm_api_key": "sk-afVplv2oRlR8SnMlC3K0ndGKOIsaBN5O3zxrD1B7zWzgNWGA",
+  "semantic_temperature": 0.2
 }

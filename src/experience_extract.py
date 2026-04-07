@@ -16,6 +16,10 @@ except ModuleNotFoundError:
 
 PROOF_ATTEMPT_KINDS = {"verify_proof_tool", "step_tactic_tool", "proof_attempt"}
 SUCCESS_STATUSES = {"proven"}
+DECL_HEAD_RE = re.compile(
+    r"^\s*(Lemma|Theorem|Corollary|Proposition|Fact|Remark)\s+[A-Za-z0-9_']+\b(?:[^:\n]|\n(?!\s*Proof\b))*?:",
+    re.MULTILINE,
+)
 TOKEN_RE = re.compile(r"[A-Za-z0-9_']+")
 QUALIFIED_RE = re.compile(r"\b([A-Z][A-Za-z0-9_']*(?:\.[A-Za-z0-9_']+)+)")
 
@@ -139,9 +143,15 @@ def extract_repair_chain(result: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def _extract_statement_body(declaration: str) -> str:
-    if ":" not in declaration:
+    match = DECL_HEAD_RE.match(declaration)
+    if match is None:
+        if ":" not in declaration:
+            return declaration.strip().rstrip(".")
+        return declaration.split(":", 1)[1].strip().rstrip(".")
+    body = declaration[match.end() :]
+    if not body.strip():
         return declaration.strip().rstrip(".")
-    return declaration.split(":", 1)[1].strip().rstrip(".")
+    return body.strip().rstrip(".")
 
 
 def _declaration_kind(declaration: str) -> str:
