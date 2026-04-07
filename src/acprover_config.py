@@ -11,7 +11,7 @@ from pathlib import Path
 
 @dataclass
 class ACProverConfig:
-    opam_switch: str = "coqswitch"
+    opam_switch: str = "qcp-8.20"
     vector_conda_env: str = "coq-py310"
 
 
@@ -32,6 +32,6 @@ def load_config() -> ACProverConfig:
         return ACProverConfig()
     payload = json.loads(path.read_text(encoding="utf-8"))
     return ACProverConfig(
-        opam_switch=str(payload.get("opam_switch", "coqswitch")),
+        opam_switch=str(payload.get("opam_switch", "qcp-8.20")),
         vector_conda_env=str(payload.get("vector_conda_env", "coq-py310")),
     )

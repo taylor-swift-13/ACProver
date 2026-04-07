@@ -1,4 +1,4 @@
 {
-  "opam_switch": "coqswitch",
+  "opam_switch": "qcp-8.20",
   "vector_conda_env": "coq-py310"
 }

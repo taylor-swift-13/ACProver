@@ -6,8 +6,8 @@ Use this workflow when proving a theorem in this repository.
 2. Treat the original proof of that theorem as unavailable.
 3. Assume the launcher has already prepared the local Coq environment.
 4. Treat the current target source file path as the only writable temp file for the run; other repository files are read-only context.
-5. Use local repository inspection plus `$ACPROVER_COQSTOQ_TOOLS` to locate surrounding definitions, lemmas, notation, and module structure.
-6. Use `$ACPROVER_COQSTOQ_TOOLS step-tactic`, `$ACPROVER_COQSTOQ_TOOLS verify-proof`, `$ACPROVER_COQSTOQ_TOOLS print-definition`, and `$ACPROVER_COQSTOQ_TOOLS bm25-search` for Coq interaction.
+5. Use local repository inspection plus shell commands such as `rg`, `sed`, `find`, and `ls` to locate surrounding definitions, lemmas, notation, and module structure.
+6. Use `$ACPROVER_COQSTOQ_TOOLS step-tactic`, `$ACPROVER_COQSTOQ_TOOLS verify-proof`, and `$ACPROVER_COQSTOQ_TOOLS bm25-search` for Coq interaction.
 7. Iterate with short visible proof attempts instead of spending time on environment debugging.
 8. As soon as a proof candidate is validated, return the final JSON immediately. Do not continue with cleanup-only or proof-irrelevant work.
 9. The launcher may stop the run automatically as soon as the target file compiles with the target theorem completed by `Qed.` or `Defined.`.

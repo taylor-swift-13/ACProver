@@ -15,7 +15,6 @@ Local Coq helpers:
 
 - `verify.py`: proof verification library
 - `verify_proof.py`: CLI wrapper around `verify.py`
-- `coq_print.py`: `Print/Check/About/Locate/Search`
 
 Maintenance scripts:
 

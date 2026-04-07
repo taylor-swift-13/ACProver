@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sqlite3
 import subprocess
 from pathlib import Path
 from typing import Any, Dict
@@ -25,6 +26,12 @@ def default_experience_root() -> Path:
     return _repo_root() / "experience"
 
 
+def experience_domain_root(domain: str) -> Path:
+    root = default_experience_root() / domain
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def _theorem_slug(theorem_id: str) -> str:
     return theorem_id.replace(":", "_")
 
@@ -36,8 +43,8 @@ def _timestamp_from_log_dir(log_dir: Path) -> str:
     return log_dir.name
 
 
-def prepare_experience_dir(theorem_id: str, status: str, log_dir: Path) -> Path:
-    root = default_experience_root()
+def prepare_experience_dir(theorem_id: str, status: str, log_dir: Path, *, experience_root: Path | None = None) -> Path:
+    root = experience_root or experience_domain_root("coqstoq")
     experience_dir = root / _theorem_slug(theorem_id) / f"{_timestamp_from_log_dir(log_dir)}_{status}"
     experience_dir.mkdir(parents=True, exist_ok=True)
     return experience_dir
@@ -55,8 +62,7 @@ def _write_optional_proof(path: Path, content: str) -> str:
     return str(path)
 
 
-def _write_metadata_index() -> Path:
-    experience_root = default_experience_root()
+def _write_metadata_index(experience_root: Path) -> Path:
     records = []
     for metadata_path in sorted(experience_root.rglob("metadata.json")):
         if metadata_path.parent == experience_root:
@@ -72,9 +78,7 @@ def _write_metadata_index() -> Path:
                 "record_id": metadata.get("record_id"),
                 "metadata_path": str(metadata_path),
                 "semantic_explanation": metadata.get("semantic_explanation", ""),
-                "source_theorem_id": metadata.get("source_theorem_id"),
-                "project": metadata.get("project"),
-                "file_relpath": metadata.get("file_relpath"),
+                "module_path": metadata.get("module_path", ""),
             }
         )
     index_path = experience_root / "metadata_index.json"
@@ -82,7 +86,75 @@ def _write_metadata_index() -> Path:
     return index_path
 
 
-def _rebuild_semantic_index() -> Dict[str, Any]:
+def _rebuild_metadata_db(experience_root: Path) -> Path:
+    db_path = experience_root / "metadata.db"
+    if db_path.exists():
+        db_path.unlink()
+    connection = sqlite3.connect(str(db_path))
+    try:
+        connection.execute(
+            """
+            CREATE TABLE records (
+                record_id TEXT PRIMARY KEY,
+                project TEXT,
+                file_path TEXT,
+                module_path TEXT,
+                semantic_explanation TEXT,
+                normalized_theorem_types_json TEXT,
+                context TEXT,
+                proof TEXT,
+                detail_path TEXT,
+                reasoning_path TEXT,
+                metadata_json TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute("CREATE INDEX idx_records_module_path ON records(module_path)")
+        connection.execute("CREATE INDEX idx_records_project ON records(project)")
+        connection.execute("CREATE INDEX idx_records_file_path ON records(file_path)")
+        connection.execute("CREATE INDEX idx_records_semantic ON records(semantic_explanation)")
+
+        for metadata_path in sorted(experience_root.rglob("metadata.json")):
+            if metadata_path.parent == experience_root:
+                continue
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(metadata, dict):
+                continue
+            record_id = str(metadata.get("record_id", "")).strip()
+            if not record_id:
+                continue
+            file_path = metadata.get("file_path", metadata.get("file_relpath", ""))
+            connection.execute(
+                """
+                INSERT INTO records (
+                    record_id, project, file_path, module_path, semantic_explanation,
+                    normalized_theorem_types_json, context, proof, detail_path, reasoning_path, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record_id,
+                    str(metadata.get("project", "")),
+                    str(file_path),
+                    str(metadata.get("module_path", "")),
+                    str(metadata.get("semantic_explanation", "")),
+                    json.dumps(metadata.get("normalized_theorem_types", []), ensure_ascii=False),
+                    str(metadata.get("context", "")),
+                    str(metadata.get("proof", "")),
+                    str(metadata.get("detail_path", "")),
+                    str(metadata.get("reasoning_path", "")),
+                    json.dumps(metadata, ensure_ascii=False),
+                ),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+    return db_path
+
+
+def _rebuild_semantic_index(experience_root: Path) -> Dict[str, Any]:
     config = load_config()
     conda = shutil.which("conda")
     if conda is None:
@@ -97,7 +169,7 @@ def _rebuild_semantic_index() -> Dict[str, Any]:
         str(script_path),
         "rebuild",
         "--experience-root",
-        str(default_experience_root()),
+        str(experience_root),
     ]
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     if completed.returncode != 0:
@@ -111,15 +183,43 @@ def _rebuild_semantic_index() -> Dict[str, Any]:
     return payload
 
 
-def write_experience_bundle(bundle: Dict[str, Any], log_dir: Path) -> Dict[str, Any]:
+def refresh_experience_indexes(experience_root: Path | None = None) -> Dict[str, Any]:
+    experience_root = experience_root or default_experience_root()
+    experience_root.mkdir(parents=True, exist_ok=True)
+    metadata_index_path = _write_metadata_index(experience_root)
+    metadata_db_path = _rebuild_metadata_db(experience_root)
+    semantic_index_warning = ""
+    try:
+        semantic_index = _rebuild_semantic_index(experience_root)
+    except Exception as exc:
+        semantic_index = {}
+        semantic_index_warning = str(exc)
+        write_json(experience_root / "semantic_index_status.json", {"warning": semantic_index_warning})
+    else:
+        write_json(experience_root / "semantic_index_status.json", {"status": semantic_index})
+    return {
+        "metadata_index_path": str(metadata_index_path),
+        "metadata_db_path": str(metadata_db_path),
+        "semantic_index_warning": semantic_index_warning,
+        "semantic_index": semantic_index,
+    }
+
+
+def write_experience_bundle(
+    bundle: Dict[str, Any],
+    log_dir: Path,
+    *,
+    rebuild_indexes: bool = True,
+) -> Dict[str, Any]:
     theorem_id = str(bundle["source_theorem_id"])
     status = "proven" if str(bundle.get("final_proof_text", "")).strip() else str(
         "oracle_postmortem" if str(bundle.get("oracle_proof_text", "")).strip() else "failed"
     )
-    experience_dir = prepare_experience_dir(theorem_id, status, log_dir)
+    experience_root = experience_domain_root("coqstoq")
+    experience_dir = prepare_experience_dir(theorem_id, status, log_dir, experience_root=experience_root)
 
     reasoning_path = _write_optional_text(experience_dir / "reasoning.md", str(bundle["reasoning_md"]))
-    issues_path = _write_optional_text(experience_dir / "issues.md", str(bundle["issues_md"]))
+    detail_path = _write_optional_text(experience_dir / "detail.md", str(bundle["detail_md"]))
     result_path = _write_optional_text(experience_dir / "result.md", str(bundle["result_md"]))
     final_proof_path = _write_optional_proof(experience_dir / "final_proof.v", str(bundle.get("final_proof_text", "")))
     oracle_proof_path = _write_optional_proof(
@@ -136,8 +236,8 @@ def write_experience_bundle(bundle: Dict[str, Any], log_dir: Path) -> Dict[str, 
         "semantic_explanation": bundle["semantic_explanation"],
         "normalized_theorem_types": bundle["normalized_theorem_types"],
         "coq_libraries": bundle["coq_libraries"],
+        "detail_path": detail_path,
         "reasoning_path": reasoning_path,
-        "issues_path": issues_path,
         "result_path": result_path,
         "final_proof_path": final_proof_path,
         "oracle_proof_path": oracle_proof_path,
@@ -150,20 +250,18 @@ def write_experience_bundle(bundle: Dict[str, Any], log_dir: Path) -> Dict[str, 
     write_json(experience_dir / "repair_chain.json", {"repair_chain": bundle.get("repair_chain", [])})
     write_json(experience_dir / "artifacts.json", bundle.get("artifacts", {}))
 
-    metadata_index_path = _write_metadata_index()
-    semantic_index_warning = ""
-    try:
-        semantic_index = _rebuild_semantic_index()
-    except Exception as exc:
-        semantic_index = {}
-        semantic_index_warning = str(exc)
-        write_json(default_experience_root() / "semantic_index_status.json", {"warning": semantic_index_warning})
+    if rebuild_indexes:
+        refresh_info = refresh_experience_indexes(experience_root)
     else:
-        write_json(default_experience_root() / "semantic_index_status.json", {"status": semantic_index})
+        refresh_info = {
+            "metadata_index_path": "",
+            "semantic_index_warning": "",
+            "semantic_index": {},
+        }
 
     return {
         "experience_dir": str(experience_dir),
         "metadata_path": str(metadata_path),
-        "metadata_index_path": str(metadata_index_path),
-        "semantic_index_warning": semantic_index_warning,
+        "metadata_index_path": refresh_info["metadata_index_path"],
+        "semantic_index_warning": refresh_info["semantic_index_warning"],
     }

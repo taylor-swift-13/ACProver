@@ -277,6 +277,19 @@ def _proof_strategy_line(proof_text: str) -> str:
     return "The proof relies on these recognizable proof moves: " + ", ".join(tags) + "."
 
 
+def _statement_parts(declaration: str) -> Dict[str, Any]:
+    body = _extract_statement_body(declaration)
+    if "<->" in body:
+        left, right = [part.strip() for part in body.split("<->", 1)]
+        return {"shape": "iff", "body": body, "assumptions": [left], "conclusion": right}
+    if "->" in body:
+        parts = [part.strip() for part in body.split("->")]
+        return {"shape": "implication", "body": body, "assumptions": parts[:-1], "conclusion": parts[-1]}
+    if body.lower().startswith("exists"):
+        return {"shape": "existential", "body": body, "assumptions": [], "conclusion": body}
+    return {"shape": "statement", "body": body, "assumptions": [], "conclusion": body}
+
+
 def _semantic_explanation(
     task: TheoremTask,
     theorem_types: List[str],
@@ -285,21 +298,74 @@ def _semantic_explanation(
 ) -> str:
     theorem_kind = _declaration_kind(task.theorem_declaration)
     statement = _explain_statement(task.theorem_declaration)
-    libraries = coq_libraries.get("declared_imports", [])[:4]
-    lib_text = ""
-    if libraries:
-        lib_text = " It is proved in a context importing " + ", ".join(libraries) + "."
-    type_text = ""
+    return f"{theorem_kind} `{task.theorem_name}`: {statement}.".strip()
+
+
+def _normalize_code_text(text: str) -> str:
+    stripped = str(text or "").strip()
+    if not stripped:
+        return ""
+    lines = stripped.splitlines()
+    if len(lines) >= 2 and lines[0].lstrip().startswith("```") and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1]).strip()
+    return stripped
+
+
+def _render_detail(
+    task: TheoremTask,
+    theorem_types: List[str],
+    coq_libraries: Dict[str, List[str]],
+    final_proof: str,
+    oracle_proof: str,
+) -> str:
+    statement = _statement_parts(task.theorem_declaration)
+    proof_basis = _complete_proof_block(task, final_proof if final_proof.strip() else oracle_proof)
+    imports = coq_libraries.get("declared_imports", [])[:8]
+    namespaces = coq_libraries.get("referenced_namespaces", [])[:8]
+
+    lines = ["# Detail", "", "## Statement", "", "```coq", task.theorem_declaration.rstrip(), "```", ""]
+    lines.append("## What This Theorem Says")
+    lines.append("")
+    lines.append(_explain_statement(task.theorem_declaration).capitalize() + ".")
+
+    assumptions = [item for item in statement.get("assumptions", []) if str(item).strip()]
+    conclusion = str(statement.get("conclusion", "")).strip()
+    if assumptions:
+        lines.extend(["", "## Assumptions And Goal", ""])
+        for idx, assumption in enumerate(assumptions, start=1):
+            lines.append(f"{idx}. Assume `{assumption}`.")
+        if conclusion:
+            lines.append(f"{len(assumptions) + 1}. Prove `{conclusion}`.")
+    elif conclusion:
+        lines.extend(["", "## Main Claim", "", f"The theorem directly establishes `{conclusion}`."])
+
     if theorem_types:
-        type_text = " The theorem is normalized as " + ", ".join(theorem_types[:4]) + "."
-    strategy_text = ""
-    strategy_tags = infer_proof_shape_tags(proof_text)
-    if strategy_tags:
-        strategy_text = " The successful proof shape is " + ", ".join(strategy_tags[:4]) + "."
-    return (
-        f"{theorem_kind} {task.theorem_name} from {task.project}/{task.file_relpath}: "
-        f"{statement}.{lib_text}{type_text}{strategy_text}"
-    ).strip()
+        lines.extend(
+            [
+                "",
+                "## Logical Shape",
+                "",
+                "This theorem is indexed as: " + ", ".join(f"`{item}`" for item in theorem_types) + ".",
+            ]
+        )
+
+    lines.extend(["", "## What The Theorem Is Doing", ""])
+    if statement.get("shape") == "implication" and assumptions and conclusion:
+        lines.append(
+            "It packages the assumptions into a reusable rule: once the hypotheses are available in the local context, the conclusion follows as a named lemma."
+        )
+    elif statement.get("shape") == "iff":
+        lines.append(
+            "It states that two formulations are equivalent, so later proofs can switch between them without reproving both directions every time."
+        )
+    elif statement.get("shape") == "existential":
+        lines.append(
+            "It records that the relevant witness exists, so later proofs can reuse the existence fact instead of rebuilding the witness."
+        )
+    else:
+        lines.append("It records a standalone reusable fact about the objects appearing in the statement.")
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _complete_proof_block(task: TheoremTask, proof_text: str) -> str:
@@ -319,45 +385,60 @@ def _summarize_reasoning(
     final_proof: str,
     oracle_proof: str,
 ) -> str:
-    summary = str(result.get("summary", "")).strip() or "No run summary was recorded."
-    proof_basis = final_proof if final_proof else oracle_proof
-    lines = [
-        "# Reasoning",
-        "",
-        f"- Theorem: `{task.theorem_name}`",
-        f"- Source theorem id: `{task.theorem_id}`",
-        f"- Project file: `{task.project}/{task.file_relpath}`",
-        f"- Normalized theorem types: {', '.join(theorem_types)}",
-        "",
-        "## Why this proof shape fits",
-        "",
-        summary,
-        "",
-        _proof_strategy_line(proof_basis),
-        "",
-        "## Coq library context",
-        "",
-        f"- Declared imports: {', '.join(coq_libraries.get('declared_imports', [])[:8]) or 'none detected'}",
-        f"- Referenced namespaces: {', '.join(coq_libraries.get('referenced_namespaces', [])[:8]) or 'none detected'}",
+    model_reasoning = str(result.get("experience_reasoning", "")).strip()
+    if model_reasoning:
+        lines = ["# Reasoning", "", "## Statement", "", "```coq", task.theorem_declaration.rstrip(), "```", "", model_reasoning.rstrip()]
+        proof_basis = final_proof if final_proof else oracle_proof
+        if proof_basis.strip():
+            lines.extend(["", "## Relevant Proof Code", "", "```coq", _complete_proof_block(task, proof_basis).rstrip(), "```"])
+        return "\n".join(lines).rstrip() + "\n"
+    visible_reasoning = [
+        str(text).strip()
+        for text in (result.get("reasoning_messages", []) or [])
+        if str(text).strip()
     ]
-    if final_proof:
-        lines.extend(
-            [
-                "",
-                "## Outcome-aware reasoning",
-                "",
-                "The final proof produced during the run is the authoritative successful script for this experience.",
-            ]
+    summary = str(result.get("summary", "")).strip()
+    explanation_lines = [
+        f"The theorem `{task.theorem_name}` in `{task.project}/{task.file_relpath}` has declaration `{task.theorem_declaration}`.",
+        "The reasoning below should explain why the proof goes through, not just which commands were run.",
+    ]
+    if theorem_types:
+        explanation_lines.append("Its normalized proof-relevant shape is: " + ", ".join(theorem_types) + ".")
+    imports = coq_libraries.get("declared_imports", [])[:8]
+    if imports:
+        explanation_lines.append(
+            "Relevant imported libraries: " + ", ".join(imports) + "."
         )
-    elif oracle_proof:
-        lines.extend(
-            [
-                "",
-                "## Outcome-aware reasoning",
-                "",
-                "The direct run did not prove the theorem. The reasoning here uses the oracle proof to explain the right proof structure for future retrieval.",
-            ]
+    namespaces = coq_libraries.get("referenced_namespaces", [])[:8]
+    if namespaces:
+        explanation_lines.append(
+            "Relevant referenced namespaces or structures: " + ", ".join(namespaces) + "."
         )
+    proof_basis = final_proof if final_proof else oracle_proof
+    if imports:
+        explanation_lines.append("Relevant imported libraries: " + ", ".join(imports) + ".")
+    if namespaces:
+        explanation_lines.append("Relevant referenced namespaces or structures: " + ", ".join(namespaces) + ".")
+    if proof_basis:
+        explanation_lines.append(_proof_strategy_line(proof_basis))
+    if summary:
+        explanation_lines.append("Run summary: " + summary)
+
+    lines = ["# Reasoning", "", "## Statement", "", "```coq", task.theorem_declaration.rstrip(), "```", ""]
+    if visible_reasoning:
+        lines.append("## Visible reasoning trace")
+        lines.append("")
+        for idx, item in enumerate(visible_reasoning, start=1):
+            lines.append(f"{idx}. {item}")
+        lines.append("")
+        lines.append("## Definitions and proof rationale")
+        lines.append("")
+    else:
+        lines.append("## Definitions and proof rationale")
+        lines.append("")
+    lines.extend(explanation_lines)
+    if proof_basis.strip():
+        lines.extend(["", "## Relevant Proof Code", "", "```coq", _complete_proof_block(task, proof_basis).rstrip(), "```"])
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -390,118 +471,19 @@ def _oracle_fix_strategy(failed_proof: str, oracle_proof: str) -> str:
     return "No oracle proof was available for a concrete fix."
 
 
-def _render_issues(
-    failed_proofs: List[Dict[str, Any]],
-    oracle_proof_text: str,
-    theorem_types: List[str],
-    coq_libraries: Dict[str, List[str]],
-    run_summary: str,
-) -> str:
-    lines = ["# Issues", ""]
-    if not failed_proofs:
-        if oracle_proof_text:
-            lines.extend(
-                [
-                    "No concrete failed proof script was captured in the run logs, but the run still failed before proving the theorem.",
-                    "",
-                    f"Run summary: {run_summary or 'No summary recorded.'}",
-                    "",
-                    "Why it is wrong:",
-                    "The direct run never reached the proof structure that actually closes the goal. Use `oracle_proof.v` as the authoritative correction and treat the missing proof move as a retrieval target.",
-                    "",
-                    "How to modify it:",
-                    _oracle_fix_strategy("", oracle_proof_text),
-                    "",
-                    f"Related theorem types: {', '.join(theorem_types)}",
-                ]
-            )
-        else:
-            lines.extend(
-                [
-                    "No blocking proof issues were recorded during this run.",
-                    "",
-                    f"Related theorem types: {', '.join(theorem_types)}",
-                ]
-            )
-        return "\n".join(lines).rstrip() + "\n"
-
-    for index, failed in enumerate(failed_proofs, start=1):
-        proof_text = str(failed.get("proof_text", "")).strip()
-        error_excerpt = str(failed.get("error_excerpt", "")).strip() or "No explicit tool error was recorded."
-        lines.extend(
-            [
-                f"## Issue {index}",
-                "",
-                f"- Failed attempt index: `{failed.get('index')}`",
-                f"- Failure kind: `{failed.get('failure_kind')}`",
-                f"- Related theorem types: {', '.join(theorem_types)}",
-                f"- Related Coq libraries: {', '.join(coq_libraries.get('declared_imports', [])[:6]) or 'none detected'}",
-                "",
-                "### Failed proof",
-                "",
-                "```coq",
-                proof_text or "(* no failed proof text captured *)",
-                "```",
-                "",
-                "### Why it is wrong",
-                "",
-                error_excerpt,
-                "",
-                _diff_strategy_summary(proof_text, oracle_proof_text),
-                "",
-                "### How to modify it",
-                "",
-                _oracle_fix_strategy(proof_text, oracle_proof_text),
-            ]
-        )
-        if oracle_proof_text:
-            lines.extend(
-                [
-                    "",
-                    "### Oracle comparison",
-                    "",
-                    "Consult `oracle_proof.v` for the authoritative corrected script used in this postmortem experience.",
-                ]
-            )
-        lines.append("")
-    return "\n".join(lines).rstrip() + "\n"
-
-
 def _render_result(
     task: TheoremTask,
     result: Dict[str, Any],
     final_proof: str,
     oracle_block: str,
 ) -> str:
-    status = str(result.get("final_status", "failed"))
-    lines = [
-        "# Result",
-        "",
-        f"- Theorem: `{task.theorem_name}`",
-        f"- Source theorem id: `{task.theorem_id}`",
-        f"- Final status: `{status}`",
-        f"- Run summary: {str(result.get('summary', '')).strip() or 'No summary recorded.'}",
-        "",
-    ]
-    if final_proof:
-        lines.extend(
-            [
-                "The run produced a successful proof. The saved `final_proof.v` is the exact reusable artifact for future attempts.",
-            ]
-        )
-    elif oracle_block:
-        lines.extend(
-            [
-                "The run did not finish the proof. The experience was completed in postmortem mode using the hidden correct proof, saved to `oracle_proof.v`.",
-            ]
-        )
-    else:
-        lines.extend(
-            [
-                "The run did not finish the proof and no oracle proof could be extracted from the source file.",
-            ]
-        )
-    return "\n".join(lines).rstrip() + "\n"
+    model_result = _normalize_code_text(str(result.get("experience_result", "")).strip())
+    if model_result:
+        return model_result.rstrip() + "\n"
+    proof_text = _normalize_code_text(final_proof if final_proof.strip() else oracle_block)
+    if proof_text.strip():
+        return proof_text.rstrip() + "\n"
+    return ""
 
 
 def build_experience_bundle(
@@ -535,6 +517,13 @@ def build_experience_bundle(
         coq_libraries,
         final_proof or oracle_proof_text,
     )
+    detail_md = _render_detail(
+        task,
+        theorem_types,
+        coq_libraries,
+        final_proof,
+        oracle_proof_text,
+    )
 
     record_id = f"{_slug(task.theorem_id)}_{_slug(str(result.get('final_status', 'unknown')))}_{_slug(log_dir.name)}"
 
@@ -546,26 +535,18 @@ def build_experience_bundle(
         final_proof,
         oracle_proof_text,
     )
-    issues_md = _render_issues(
-        failed_proofs,
-        oracle_proof_text,
-        theorem_types,
-        coq_libraries,
-        str(result.get("summary", "")).strip(),
-    )
     result_md = _render_result(task, result, final_proof, oracle_block)
 
     return {
         "record_id": record_id,
         "source_theorem_id": task.theorem_id,
-        "project": task.project,
-        "file_relpath": task.file_relpath,
-        "source_file_path": str(task.source_path()),
+        "module_path": f"{task.project}:{task.file_relpath}",
         "semantic_explanation": semantic_explanation,
         "normalized_theorem_types": theorem_types,
-        "coq_libraries": coq_libraries,
+        "context": task.theorem_declaration,
+        "proof": (_complete_proof_block(task, final_proof) or oracle_block or result_md).strip(),
+        "detail_md": detail_md,
         "reasoning_md": reasoning_md,
-        "issues_md": issues_md,
         "result_md": result_md,
         "final_proof_text": _complete_proof_block(task, final_proof),
         "oracle_proof_text": oracle_block,

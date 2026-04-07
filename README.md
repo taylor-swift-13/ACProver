@@ -1,33 +1,28 @@
 # ACProver
 
-ACProver is a local Coq proving workspace built on top of CoqStoq. The current runtime is intentionally small:
+ACProver is now a local retrieval workspace for Coq standard-library theorem records.
 
-- Codex is the proof engine
-- the local Coq shell is the proof surface
-- the launcher hides the target theorem's original proof in a disposable shadow workspace
-- every run is logged under `log/`
+Current scope:
 
-Repository layout:
-
-- `src/`: launcher, theorem loading, logging, and local Coq helpers
-- `docs/`: runtime contract and workflow notes
-- `skills/`: Codex skill used during proof runs
-- `config/`: machine-local defaults
-- `CoqStoq/`: dataset projects, theorem metadata, and source repositories
+- proving is disabled
+- standard-library theorem records are stored under `experience/`
+- FAISS indexes `semantic_explanation`
+- agents read `detail.md` and `reasoning.md`
 
 ## Environment
 
-The runtime expects a local Coq 8.18 toolchain. The preferred switch name lives in `config/acprover.local.json`.
-The semantic experience index uses the configured `coq-py310` conda environment.
+The retrieval workflow expects:
+
+- Coq 8.20 available from the configured environment
+- `coq-py310` conda env for FAISS and index rebuilds
 
 Quick check:
 
 ```bash
-eval "$(opam env --switch=coqswitch)"
-coqc --version
+CONDA_NO_PLUGINS=true conda run -n coq-py310 coqc -where
 ```
 
-For the semantic explanation index, install `faiss-cpu` in the `coq-py310` conda env, for example:
+Install FAISS if needed:
 
 ```bash
 conda install -n coq-py310 numpy faiss-cpu -c conda-forge
@@ -35,56 +30,22 @@ conda install -n coq-py310 numpy faiss-cpu -c conda-forge
 
 ## Main entry points
 
-- `proof_task_client.py`: root CLI entry
-- `src/proof_task_client.py`: thin Codex launcher
-- `src/theorem_task.py`: theorem lookup and target-proof masking
-- `src/codex_runner.py`: shadow-workspace setup and `codex exec`
-- `src/verify.py`: local proof verifier
-- `src/coq_print.py`: local print/check/search helper
-
-## Run a proof task
+Build records for `Coq.Lists.List`:
 
 ```bash
-python3 proof_task_client.py --theorem-id test:1 --timeout-seconds 120
+python3 src/coqstoq_tools.py build-stdlib-index --module-path Coq.Lists.List
 ```
 
-Useful inspection commands:
+Query by natural language:
 
 ```bash
-python3 proof_task_client.py --theorem-id test:1 --dump-task
-python3 proof_task_client.py --theorem-id test:1 --dump-prompt
+python3 src/coqstoq_tools.py query-experience --description "append with empty list on the right" -k 5
 ```
 
-Natural-language experience query:
+Legacy proving entrypoint:
 
 ```bash
-python3 src/coqstoq_tools.py query-experience --description "prove an order lemma from equality in mathcomp" -k 5
+python3 src/proof_task_client.py
 ```
 
-## Logs
-
-Each run writes a directory under `log/` containing:
-
-- `task.json`
-- `prompt.txt`
-- `codex_command.json`
-- `runtime_env.json`
-- `workspace_manifest.json`
-- `events.jsonl`
-- `codex_stderr.log`
-- `result.json`
-- `readable`
-- `temp_initial.v`
-- `final_temp_snapshot.v` when available
-
-The shadow workspace is deleted after the run. The original repository tree is left untouched.
-
-## Maintenance helpers
-
-If you need to rebuild the dataset projects:
-
-```bash
-cd src
-bash build_coqstoq_complete.sh
-python3 check_build_status.py
-```
+This now returns a clear error because proving is disabled.

@@ -102,10 +102,9 @@ Requirements:
 - Prefer these direct helper commands over re-implementing them manually:
   - `python3 "$ACPROVER_COQSTOQ_TOOLS" verify-proof --theorem-id "$ACPROVER_THEOREM_ID" --proof-file /tmp/proof.v`
   - `python3 "$ACPROVER_COQSTOQ_TOOLS" step-tactic --theorem-id "$ACPROVER_THEOREM_ID" --proof-prefix-file /tmp/prefix.v --tactic "intros x."`
-  - `python3 "$ACPROVER_COQSTOQ_TOOLS" print-definition --theorem-id "$ACPROVER_THEOREM_ID" --definition foo`
   - `python3 "$ACPROVER_COQSTOQ_TOOLS" bm25-search --theorem-id "$ACPROVER_THEOREM_ID" --query "rewrite equality lemma" --scope current_dir`
-- Use shell commands such as `rg`, `sed`, `ls`, and file writes for exploration only.
-- All interaction with Coq itself must go through `$ACPROVER_COQSTOQ_TOOLS`. Do not call `coqc`, `coqtop`, `verify.py`, or `coq_print.py` directly unless the launcher instructions are changed.
+- Use shell commands such as `rg`, `sed`, `find`, `ls`, and file reads to locate surrounding definitions, notations, imports, and related lemmas yourself.
+- All interaction with Coq itself must go through `$ACPROVER_COQSTOQ_TOOLS`. Do not call `coqc`, `coqtop`, or `verify.py` directly unless the launcher instructions are changed.
 - Prefer fast proof attempts over long reading passes. After a small number of targeted reads/searches, switch to `coqtop`, `coqc`, or `verify.py` and test a candidate proof.
 - After a small number of targeted reads/searches, switch to `$ACPROVER_COQSTOQ_TOOLS step-tactic` or `$ACPROVER_COQSTOQ_TOOLS verify-proof` and test a candidate proof.
 - For difficult theorems, decompose the proof into auxiliary lemmas early.
@@ -122,6 +121,9 @@ Requirements:
 - The launcher will automatically stop the run once it detects a successful compile of the target file with the target theorem finished by `Qed.` or `Defined.`.
 - Keep your visible reasoning explicit enough for debugging. Every externally visible proof attempt and tool outcome should be understandable from the saved logs.
 - Use roughly a {config.max_tokens}-token visible-output budget across the session. Be complete, but do not repeat yourself.
+- Your final JSON must include:
+  - `experience_reasoning`: a natural-language explanation of why the theorem is proved this way, including the key definitions and facts needed to understand the proof. Include relevant Coq code snippets for the statement and the crucial proof fragment.
+  - `experience_result`: the final proof code only. If no final proof is available, return an empty string.
 - Your final response must satisfy the provided JSON schema.
 """
 
@@ -130,7 +132,13 @@ def _build_output_schema() -> Dict[str, Any]:
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["final_status", "final_proof", "summary"],
+        "required": [
+            "final_status",
+            "final_proof",
+            "summary",
+            "experience_reasoning",
+            "experience_result",
+        ],
         "properties": {
             "final_status": {
                 "type": "string",
@@ -143,6 +151,14 @@ def _build_output_schema() -> Dict[str, Any]:
             "summary": {
                 "type": "string",
                 "description": "Concise debugging-oriented summary of what happened.",
+            },
+            "experience_reasoning": {
+                "type": "string",
+                "description": "Natural-language explanation of why the proof works, including the key definitions, intermediate facts, and relevant Coq code snippets.",
+            },
+            "experience_result": {
+                "type": "string",
+                "description": "Final proof code only. Return an empty string if no final proof is available.",
             },
         },
     }
@@ -241,8 +257,6 @@ def _classify_command(command: str) -> str:
         return "verify_proof_tool"
     if "coqstoq_tools.py step-tactic" in command:
         return "step_tactic_tool"
-    if "coqstoq_tools.py print-definition" in command:
-        return "print_definition_tool"
     if "coqstoq_tools.py bm25-search" in command:
         return "bm25_search_tool"
     if "coqc" in command:

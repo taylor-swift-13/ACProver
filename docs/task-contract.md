@@ -47,15 +47,15 @@ Preferred discovery tools:
 
 - `rg`
 - `sed`
+- `find`
 - `python3 "$ACPROVER_COQSTOQ_TOOLS" bm25-search ...`
-- `python3 "$ACPROVER_COQSTOQ_TOOLS" print-definition ...`
 
 Preferred proof tools:
 
 - `python3 "$ACPROVER_COQSTOQ_TOOLS" verify-proof ...`
 - `python3 "$ACPROVER_COQSTOQ_TOOLS" step-tactic ...`
 
-Shell is still allowed, but Coq interaction should go through `$ACPROVER_COQSTOQ_TOOLS` instead of direct `coqc`, `coqtop`, `verify.py`, or `coq_print.py` calls.
+Shell is still allowed, and should be used to find relevant definitions and lemmas in the repository, but Coq interaction should go through `$ACPROVER_COQSTOQ_TOOLS` instead of direct `coqc`, `coqtop`, or `verify.py` calls.
 
 ## Non-goals
 
