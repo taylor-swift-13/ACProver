@@ -44,6 +44,23 @@ Query by natural language:
 python3 src/coqstoq_tools.py query-stdlib --description "append with empty list on the right" -k 5
 ```
 
+Rebuild stdlib indexes from existing records:
+
+```bash
+python3 src/coqstoq_tools.py build-stdlib-from-existing
+```
+
+Convenience query wrapper:
+
+```bash
+python3 scripts/query_experience.py --domain stdlib --description "append with empty list on the right" -k 5
+python3 scripts/query_experience.py --domain stdlib --sql "select record_id, item_kind from records limit 10"
+```
+
+Detailed retrieval guide:
+
+- `docs/stdlib-retrieval.md`
+
 Legacy proving entrypoint:
 
 ```bash

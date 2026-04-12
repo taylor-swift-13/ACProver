@@ -81,6 +81,18 @@ def cmd_build_coqstoq_index(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
+def cmd_build_stdlib_from_existing(args: argparse.Namespace) -> Dict[str, Any]:
+    root = experience_domain_root("stdlib")
+    refresh = refresh_experience_indexes(root)
+    return {
+        "success": True,
+        "source": "stdlib",
+        "message": "Rebuilt stdlib metadata and FAISS indexes from existing records.",
+        "experience_root": str(root),
+        "refresh": refresh,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser("Local retrieval tools for standard-library and CoqStoq theorem records.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -95,6 +107,8 @@ def build_parser() -> argparse.ArgumentParser:
     stdlib_parser = subparsers.add_parser("build-stdlib-index")
     stdlib_parser.add_argument("--module-path", default="Coq.Lists.List")
     stdlib_parser.add_argument("--no-rebuild-indexes", action="store_true")
+
+    subparsers.add_parser("build-stdlib-from-existing")
 
     coqstoq_query = subparsers.add_parser("query-coqstoq")
     coqstoq_query.add_argument("--description", required=True)
@@ -117,6 +131,8 @@ def main() -> None:
         result = cmd_query_stdlib_sql(args)
     elif args.command == "build-stdlib-index":
         result = cmd_build_stdlib_index(args)
+    elif args.command == "build-stdlib-from-existing":
+        result = cmd_build_stdlib_from_existing(args)
     elif args.command == "query-coqstoq":
         result = cmd_query_coqstoq(args)
     elif args.command == "query-coqstoq-sql":

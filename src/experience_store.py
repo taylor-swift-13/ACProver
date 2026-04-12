@@ -99,10 +99,13 @@ def _rebuild_metadata_db(experience_root: Path) -> Path:
                 project TEXT,
                 file_path TEXT,
                 module_path TEXT,
+                item_kind TEXT,
+                item_name TEXT,
                 semantic_explanation TEXT,
                 normalized_theorem_types_json TEXT,
                 context TEXT,
                 proof TEXT,
+                related_json TEXT,
                 detail_path TEXT,
                 reasoning_path TEXT,
                 metadata_json TEXT NOT NULL
@@ -112,6 +115,8 @@ def _rebuild_metadata_db(experience_root: Path) -> Path:
         connection.execute("CREATE INDEX idx_records_module_path ON records(module_path)")
         connection.execute("CREATE INDEX idx_records_project ON records(project)")
         connection.execute("CREATE INDEX idx_records_file_path ON records(file_path)")
+        connection.execute("CREATE INDEX idx_records_item_kind ON records(item_kind)")
+        connection.execute("CREATE INDEX idx_records_item_name ON records(item_name)")
         connection.execute("CREATE INDEX idx_records_semantic ON records(semantic_explanation)")
 
         for metadata_path in sorted(experience_root.rglob("metadata.json")):
@@ -130,19 +135,22 @@ def _rebuild_metadata_db(experience_root: Path) -> Path:
             connection.execute(
                 """
                 INSERT INTO records (
-                    record_id, project, file_path, module_path, semantic_explanation,
-                    normalized_theorem_types_json, context, proof, detail_path, reasoning_path, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    record_id, project, file_path, module_path, item_kind, item_name, semantic_explanation,
+                    normalized_theorem_types_json, context, proof, related_json, detail_path, reasoning_path, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record_id,
                     str(metadata.get("project", "")),
                     str(file_path),
                     str(metadata.get("module_path", "")),
+                    str(metadata.get("item_kind", "")),
+                    str(metadata.get("item_name", "")),
                     str(metadata.get("semantic_explanation", "")),
                     json.dumps(metadata.get("normalized_theorem_types", []), ensure_ascii=False),
                     str(metadata.get("context", "")),
                     str(metadata.get("proof", "")),
+                    json.dumps(metadata.get("related", []), ensure_ascii=False),
                     str(metadata.get("detail_path", "")),
                     str(metadata.get("reasoning_path", "")),
                     json.dumps(metadata, ensure_ascii=False),
