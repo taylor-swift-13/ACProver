@@ -1,6 +1,6 @@
 # Architecture
 
-ACProver now uses a thin launcher architecture:
+RocSql now uses a thin launcher architecture:
 
 - `config/acprover.local.json`
   - repository-local machine/runtime defaults

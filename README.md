@@ -1,14 +1,14 @@
-# ACProver
+# RocSql
 
-ACProver is now a local retrieval workspace for Coq standard-library theorem records.
+RocSql is a local retrieval workspace for Coq standard-library theorem records.
 
 Current scope:
 
 - proving is disabled
 - standard-library theorem records are stored under `experience/`
-- FAISS indexes `semantic_explanation`
+- FAISS indexes `semantic_explanation` with a local Hugging Face embedding model
 - agents read `detail.md` and `reasoning.md`
-- standard-library text generation uses `gpt-5-nano` by default
+- standard-library text generation uses `gpt-5.4-nano` by default
 - local rule-based text generation is only a fallback when model generation fails
 
 ## Environment
@@ -17,17 +17,19 @@ The retrieval workflow expects:
 
 - Coq 8.20 available from the configured environment
 - `coq-py310` conda env for FAISS and index rebuilds
+- local Hugging Face model download support in the vector environment
 
-Quick check:
+Quick check from the repository root:
 
 ```bash
 CONDA_NO_PLUGINS=true conda run -n coq-py310 coqc -where
 ```
 
-Install FAISS if needed:
+Install vector dependencies if needed:
 
 ```bash
-conda install -n coq-py310 numpy faiss-cpu -c conda-forge
+conda install -n coq-py310 numpy faiss-cpu pytorch pyyaml -c conda-forge
+pip install transformers huggingface_hub
 ```
 
 ## Main entry points
@@ -50,11 +52,11 @@ Rebuild stdlib indexes from existing records:
 python3 src/coqstoq_tools.py build-stdlib-from-existing
 ```
 
-Convenience query wrapper:
+Convenience query wrappers:
 
 ```bash
-python3 scripts/query_experience.py --domain stdlib --description "append with empty list on the right" -k 5
-python3 scripts/query_experience.py --domain stdlib --sql "select record_id, item_kind from records limit 10"
+python3 scripts/query_stdlib_experience.py --description "append with empty list on the right" -k 5
+python3 scripts/query_stdlib_experience.py --sql "select record_id, item_kind from records limit 10"
 ```
 
 Detailed retrieval guide:

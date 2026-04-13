@@ -62,7 +62,7 @@ def _query_sql(domain: str, sql: str) -> Dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser("Query ACProver experience records.")
+    parser = argparse.ArgumentParser("Query RocSql experience records.")
     parser.add_argument("--domain", choices=["stdlib", "coqstoq"], default="stdlib")
     parser.add_argument("--description", help="Natural-language query for semantic retrieval.")
     parser.add_argument("--sql", help="SQL query over metadata.db.")

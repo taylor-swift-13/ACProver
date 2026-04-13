@@ -1,4 +1,4 @@
-# ACProver Tools (`src/`)
+# RocSql Tools (`src/`)
 
 Use the repository root guide first:
 
